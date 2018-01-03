@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% @author lenovo
+%%% @author Dawid Tomasiewicz
 %%% @copyright (C) 2017, <COMPANY>
 %%% @doc
 %%%
