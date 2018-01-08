@@ -10,56 +10,99 @@
 -author("Dawid Tomasiewicz").
 
 %% API
--export([start/0, server/2, producer/1, consumer/1, count/1]).
+-export([start/2, server/3, producer/1, consumer/1, count/2]).
 
 
-count(N) ->
+count(N, ThousandsCounter) ->
   receive
     X ->
       if
-        N >= 10000 -> io:format("YEAAAAAH");
-        true -> count(N + X)
+        N >= 1000 ->
+          io:format("Yeah! We have produced ~p elements!~n", [ThousandsCounter]),
+          count(0, ThousandsCounter + 1000);
+        true -> count(N + X, ThousandsCounter)
       end
   end.
 
 %%
-server(Buffer, Capacity) ->
-%%  io:format("Buffer after: ~p~n", [Buffer]),
+server(Buffer, Capacity, CountPid) ->
   receive
 %%    PRODUCER
-%%  FIXME no need for number, this is redundancy, may cause problems
     {Pid, produce, InputList} ->
       NumberProduce = lists:flatlength(InputList),
       case canProduce(Buffer, NumberProduce, Capacity) of
         true ->
-%%          io:format("Producing ~p ~p~n", [NumberProduce, InputList]),
           NewBuffer = append(InputList, Buffer),
+          CountPid ! lists:flatlength(InputList),
           Pid ! ok,
-          server(NewBuffer,Capacity);
+          server(NewBuffer,Capacity, CountPid);
         false ->
-%%          io:format("Cannot produce ~p ~p~n", [NumberProduce, InputList]),
           Pid ! tryagain,
-          server(Buffer, Capacity)
+          server(Buffer, Capacity, CountPid)
       end;
 
 %%    CONSUMER
     {Pid, consume, Number} ->
       case canConsume(Buffer, Number) of
         true ->
-%%          send message with data consumed
-%%          io:format("Consuming ~p ~n", [Number]),
           Data = lists:sublist(Buffer, Number),
           NewBuffer = lists:subtract(Buffer, Data),
           Pid ! {ok, Data},
-          server(NewBuffer, Capacity);
+          server(NewBuffer, Capacity,CountPid);
         false ->
-%%          send request to try again
-%%          io:format("Cannot consume ~p ~n", [Number]),
           Pid ! tryagain,
-          server(Buffer, Capacity)
+          server(Buffer, Capacity, CountPid)
 
       end
   end.
+
+
+
+producer(ServerPid) ->
+  X = rand:uniform(9),
+  ToProduce = [rand:uniform(500) || _ <- lists:seq(1, X)],
+  ServerPid ! {self(),produce,ToProduce},
+
+  receive
+    _ -> producer(ServerPid)
+  end.
+
+
+
+
+consumer(ServerPid) ->
+  X = rand:uniform(9),
+  ServerPid ! {self(),consume,X},
+
+  receive
+    _ -> consumer(ServerPid)
+  end.
+
+spawnProducers(Number, ServerPid) ->
+  case Number of
+    0 -> io:format("Spawned producers");
+    N ->
+      spawn(zad2,producer,[ServerPid]),
+      spawnProducers(N - 1,ServerPid)
+  end.
+
+spawnConsumers(Number, ServerPid) ->
+  case Number of
+    0 -> io:format("Spawned producers");
+    N ->
+      spawn(zad2,consumer,[ServerPid]),
+      spawnProducers(N - 1,ServerPid)
+  end.
+
+start(ProdsNumber, ConsNumber) ->
+  CountPid = spawn(zad2, count, [0,0]),
+
+  ServerPid = spawn(zad2,server,[[],20, CountPid]),
+
+  spawnProducers(ProdsNumber, ServerPid),
+  spawnConsumers(ConsNumber, ServerPid),
+
+  timer:kill_after(5000, ServerPid).
 
 canProduce(Buffer, Number, Capacity) ->
   lists:flatlength(Buffer) + Number =< Capacity.
@@ -67,30 +110,12 @@ canProduce(Buffer, Number, Capacity) ->
 canConsume(Buffer, Number) ->
   lists:flatlength(Buffer) >= Number.
 
-producer(ServerPid) ->
-  X = rand:uniform(9),
-  ToProduce = [rand:uniform(500) || _ <- lists:seq(1, X)],
-  ServerPid ! {self(),produce,ToProduce},
-  receive
-%%    TODO handle tryagain message
-    Message -> io:format("Produce ~p ~p~n", [X,Message])
-  end,
-  producer(ServerPid).
 
-consumer(ServerPid) ->
-  X = rand:uniform(9),
-  ServerPid ! {self(),consume,X},
-  receive
-    Message -> io:format("Consume ~p ~p~n", [X,Message])
-  end,
-  consumer(ServerPid).
+append([H|T], Tail) ->
+  [H|append(T, Tail)];
+append([], Tail) ->
+  Tail.
 
-start() ->
-  ServerPid = spawn(zad2,server,[[],20]),
-
-  spawn(zad2, count, [0]),
-  spawn(zad2, producer, [ServerPid]),
-  spawn(zad2, consumer, [ServerPid]).
 %%  ServerPid ! {self(),produce,5,[1,4,9,16,25]},
 %%  receive
 %%    Something1 -> io:format("Produce 5: ~p~n", [Something1])
@@ -125,9 +150,3 @@ start() ->
 
 
 %%  io:format("~p~n", [canProduce([1,2,3,4], 5,9)]).
-
-
-append([H|T], Tail) ->
-  [H|append(T, Tail)];
-append([], Tail) ->
-  Tail.
