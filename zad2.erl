@@ -61,21 +61,30 @@ server(Buffer, Capacity, CountPid) ->
 producer(ServerPid) ->
   X = rand:uniform(9),
   ToProduce = [rand:uniform(500) || _ <- lists:seq(1, X)],
+
+  actualProduce(ToProduce, ServerPid).
+
+
+actualProduce(ToProduce, ServerPid) ->
   ServerPid ! {self(),produce,ToProduce},
 
   receive
-    _ -> producer(ServerPid)
+    tryagain -> actualProduce(ToProduce, ServerPid);
+    ok -> producer(ServerPid)
   end.
-
-
-
 
 consumer(ServerPid) ->
   X = rand:uniform(9),
-  ServerPid ! {self(),consume,X},
+
+  actualConsume(ServerPid,X).
+
+
+actualConsume(ServerPid, Number) ->
+  ServerPid ! {self(),consume,Number},
 
   receive
-    _ -> consumer(ServerPid)
+    tryagain -> actualConsume(ServerPid, Number);
+    {ok, Data} -> consumer(ServerPid)
   end.
 
 spawnProducers(Number, ServerPid) ->
@@ -103,6 +112,7 @@ start(ProdsNumber, ConsNumber) ->
   spawnConsumers(ConsNumber, ServerPid),
 
   timer:kill_after(5000, ServerPid).
+%%  io:format("Time is up. Program has produces for 5 seconds").
 
 canProduce(Buffer, Number, Capacity) ->
   lists:flatlength(Buffer) + Number =< Capacity.
