@@ -9,24 +9,14 @@
 -module(distbuf).
 -author("Dawid Tomasiewicz").
 
-%% FIXME make getting buffer more random (now it takes first only in fact)
-
 
 %% API
 -export([start/2, server/3, producer/1, consumer/1, count/2, partialBuffer/1, setnth/3]).
 
 
-count(N, ThousandsCounter) ->
-  receive
-    X ->
-      if
-        N >= 1000 ->
-          io:format("Yeah! We have already produced ~p elements!~n", [ThousandsCounter]),
-          count(0, ThousandsCounter + 1000);
-        true -> count(N + X, ThousandsCounter)
-      end
-  end.
 
+
+%% SERVER, PRODUCER AND CONSUMER
 server(BuffersList, CountPid, Capacity) ->
 %%  io:format("Buffers list: ~p~n", [BuffersList]),
   receive
@@ -72,6 +62,106 @@ server(BuffersList, CountPid, Capacity) ->
           end
       end
   end.
+
+
+partialBuffer(Buffer) ->
+  receive
+    {ServerPid, produce, ToProduce} ->
+      NewBuffer = append(ToProduce, Buffer),
+      ServerPid ! ok,
+      partialBuffer(NewBuffer);
+    {ServerPid, consume, Number} ->
+      Data = lists:sublist(Buffer, Number),
+      NewBuffer = lists:subtract(Buffer, Data),
+      ServerPid ! {ok, Data},
+      partialBuffer(NewBuffer)
+  end.
+
+
+
+
+producer(ServerPid) ->
+  X = rand:uniform(9),
+  ToProduce = [rand:uniform(500) || _ <- lists:seq(1, X)],
+
+  actualProduce(ToProduce, ServerPid).
+
+
+actualProduce(ToProduce, ServerPid) ->
+  ServerPid ! {self(),produce,ToProduce},
+
+  receive
+    tryagain -> actualProduce(ToProduce, ServerPid);
+    ok -> producer(ServerPid)
+  end.
+
+consumer(ServerPid) ->
+  X = rand:uniform(9),
+%%  io:format("Consumer will send ~p elements ~n",[X]),
+  actualConsume(ServerPid,X).
+
+
+actualConsume(ServerPid, Number) ->
+  ServerPid ! {self(),consume,Number},
+
+  receive
+    tryagain -> actualConsume(ServerPid, Number);
+    {ok, Data} -> consumer(ServerPid)
+  end.
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% START
+
+start(ProdsNumber, ConsNumber) ->
+  CountPid = spawn(distbuf, count, [0,0]),
+  PartialBuffersList = spawnPartialBuffersAndGetListOfThem(10),
+  ServerPid = spawn(distbuf,server,[PartialBuffersList,CountPid, 20 ]),
+  spawnProducers(ProdsNumber, ServerPid),
+  spawnConsumers(ConsNumber, ServerPid).
+%%  timer:kill_after(5000, ServerPid).
+%%  io:format("Time is up. Program has produces for 5 seconds").
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% FUNCTIONS SPAWNING PROCESSES
+
+spawnProducers(Number, ServerPid) ->
+  case Number of
+    0 -> io:format("Spawned producers");
+    N ->
+      spawn(distbuf,producer,[ServerPid]),
+      spawnProducers(N - 1,ServerPid)
+  end.
+
+spawnConsumers(Number, ServerPid) ->
+  case Number of
+    0 -> io:format("Spawned producers");
+    N ->
+      spawn(distbuf,consumer,[ServerPid]),
+      spawnProducers(N - 1,ServerPid)
+  end.
+
+spawnPartialBuffersAndGetListOfThem(1) ->
+  [{spawn(distbuf, partialBuffer, [[]]),0}];
+spawnPartialBuffersAndGetListOfThem(HowMany) ->
+  [{spawn(distbuf, partialBuffer, [[]]),0} | spawnPartialBuffersAndGetListOfThem(HowMany - 1)].
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% HELPERS FOR PRODUCERS AND CONSUMERS
+
+canProduce(HowManyFilled, Number, Capacity) ->
+  HowManyFilled + Number =< Capacity.
+
+canConsume(HowManyFilled, Number) ->
+  HowManyFilled >= Number.
+
+
+append([H|T], Tail) ->
+  [H|append(T, Tail)];
+append([], Tail) ->
+  Tail.
+
 
 getUpdatedBufferList([{BufferPid, NumberOfElements}|Tail], GoodPid, Number) ->
   Index = getIndex(1,[{BufferPid, NumberOfElements}|Tail], GoodPid),
@@ -147,97 +237,15 @@ getBufferPidToConsume([{Pid, HowManyFilled}|Tail], Number, Capacity) ->
       Pid
   end.
 
-partialBuffer(Buffer) ->
+
+%% COUNTING PRODUCED ELEMENTS
+count(N, ThousandsCounter) ->
   receive
-    {ServerPid, produce, ToProduce} ->
-      NewBuffer = append(ToProduce, Buffer),
-      ServerPid ! ok,
-      partialBuffer(NewBuffer);
-    {ServerPid, consume, Number} ->
-      Data = lists:sublist(Buffer, Number),
-      NewBuffer = lists:subtract(Buffer, Data),
-      ServerPid ! {ok, Data},
-      partialBuffer(NewBuffer)
+    X ->
+      if
+        N >= 1000 ->
+          io:format("Yeah! We have already produced ~p elements!~n", [ThousandsCounter]),
+          count(0, ThousandsCounter + 1000);
+        true -> count(N + X, ThousandsCounter)
+      end
   end.
-
-
-
-
-producer(ServerPid) ->
-  X = rand:uniform(9),
-  ToProduce = [rand:uniform(500) || _ <- lists:seq(1, X)],
-
-  actualProduce(ToProduce, ServerPid).
-
-
-actualProduce(ToProduce, ServerPid) ->
-  ServerPid ! {self(),produce,ToProduce},
-
-  receive
-    tryagain -> actualProduce(ToProduce, ServerPid);
-    ok -> producer(ServerPid)
-  end.
-
-consumer(ServerPid) ->
-  X = rand:uniform(9),
-%%  io:format("Consumer will send ~p elements ~n",[X]),
-  actualConsume(ServerPid,X).
-
-
-actualConsume(ServerPid, Number) ->
-  ServerPid ! {self(),consume,Number},
-
-  receive
-    tryagain -> actualConsume(ServerPid, Number);
-    {ok, Data} -> consumer(ServerPid)
-  end.
-
-spawnProducers(Number, ServerPid) ->
-  case Number of
-    0 -> io:format("Spawned producers");
-    N ->
-      spawn(distbuf,producer,[ServerPid]),
-      spawnProducers(N - 1,ServerPid)
-  end.
-
-spawnConsumers(Number, ServerPid) ->
-  case Number of
-    0 -> io:format("Spawned producers");
-    N ->
-      spawn(distbuf,consumer,[ServerPid]),
-      spawnProducers(N - 1,ServerPid)
-  end.
-
-spawnPartialBuffersAndGetListOfThem(1) ->
-  [{spawn(distbuf, partialBuffer, [[]]),0}];
-spawnPartialBuffersAndGetListOfThem(HowMany) ->
-  [{spawn(distbuf, partialBuffer, [[]]),0} | spawnPartialBuffersAndGetListOfThem(HowMany - 1)].
-
-start(ProdsNumber, ConsNumber) ->
-  CountPid = spawn(distbuf, count, [0,0]),
-
-
-%%  List = [{1,15},{2,20},{3,25},{4,30},{5,35}],
-%%  NewList = setnth(getIndex(1,List,4),List,{4,33}),
-%%  NewList = getUpdatedBufferList(List, 5, -3),
-%%  io:format("New list: ~p~n", [NewList]).
-  PartialBuffersList = spawnPartialBuffersAndGetListOfThem(10),
-
-  ServerPid = spawn(distbuf,server,[PartialBuffersList,CountPid, 20 ]),
-%%
-  spawnProducers(ProdsNumber, ServerPid),
-  spawnConsumers(ConsNumber, ServerPid).
-%%  timer:kill_after(5000, ServerPid).
-%%  io:format("Time is up. Program has produces for 5 seconds").
-
-canProduce(HowManyFilled, Number, Capacity) ->
-  HowManyFilled + Number =< Capacity.
-
-canConsume(HowManyFilled, Number) ->
-  HowManyFilled >= Number.
-
-
-append([H|T], Tail) ->
-  [H|append(T, Tail)];
-append([], Tail) ->
-  Tail.
